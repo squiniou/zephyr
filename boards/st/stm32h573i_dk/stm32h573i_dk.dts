@@ -80,6 +80,12 @@
 		/* The ATTR_MPU_EXTMEM attribut causing a MPU FAULT */
 		zephyr,memory-attr = <( DT_MEM_ARM(ATTR_MPU_IO) )>;
 	};
+
+	lvgl_pointer {
+		compatible = "zephyr,lvgl-pointer-input";
+		input = <&ft5336>;
+		invert-y;
+	};
 };
 
 &fmc {
@@ -198,6 +204,22 @@
 	pinctrl-names = "default";
 	clock-frequency = <I2C_BITRATE_FAST>;
 	status = "okay";
+};
+
+&i2c4 {
+	pinctrl-0 = <&i2c4_scl_pb8 &i2c4_sda_pb9>;
+	pinctrl-names = "default";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	status = "okay";
+
+	/* The board embeds the Self-Capacitive Touch Panel Controller ft3267
+	that can be controlled by the ft5336 driver */
+	ft5336: ft5336@38 {
+		compatible = "focaltech,ft5336";
+		reg = <0x38>;
+		int-gpios = <&gpiog 7 GPIO_ACTIVE_LOW>;
+		reset-gpios = <&gpiog 3 GPIO_ACTIVE_LOW>;
+	};
 };
 
 &usart1 {
