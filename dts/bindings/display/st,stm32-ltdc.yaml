@@ -21,6 +21,17 @@ properties:
       Backlight on/off GPIO pin.
       Configure the GPIO polarity (active high/active low) according to LCD datasheet.
 
+  pwms:
+    type: phandle-array
+    description: |
+      Reference to a PWM instance to drive the brightness of the backlight of the display.
+
+      The period field is used by the set_brightness function of the DISPLAY API.
+      Its value should at least be greater that 100 nanoseconds (for a full
+      brigtness granularity) and lesser than 50 milliseconds (average visual
+      persistence time of the human eye). Typical values for the PWM period
+      are 10 or 20 milliseconds.
+
   ext-sdram:
     type: phandle
     description: |

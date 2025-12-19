@@ -14,6 +14,7 @@
 #include <stm32_ll_rcc.h>
 #include <zephyr/drivers/display.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/pwm.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/drivers/clock_control/stm32_clock_control.h>
 #include <zephyr/drivers/clock_control.h>
@@ -77,6 +78,7 @@ struct display_stm32_ltdc_config {
 	uint32_t height;
 	struct gpio_dt_spec disp_on_gpio;
 	struct gpio_dt_spec bl_ctrl_gpio;
+	struct pwm_dt_spec bl_ctrl_pwm;
 	const struct stm32_pclken *pclken;
 	size_t pclk_len;
 	const struct reset_dt_spec reset;
@@ -144,6 +146,25 @@ static int stm32_ltdc_set_orientation(const struct device *dev,
 
 	if (orientation == DISPLAY_ORIENTATION_NORMAL) {
 		return 0;
+	}
+
+	return -ENOTSUP;
+}
+
+static int stm32_ltdc_set_brightness(const struct device *dev, uint8_t brightness)
+{
+	const struct display_stm32_ltdc_config *config = dev->config;
+
+	/* Turn on/off backlight (if its GPIO is defined in device tree) */
+	if (config->bl_ctrl_gpio.port) {
+		int gpio_value = (brightness != 0) ? 1 : 0;
+		return gpio_pin_set_dt(&config->bl_ctrl_gpio, gpio_value);
+	}
+
+	/* Set brightness of the backlight (if its PWM is defined in device tree) */
+	if (config->bl_ctrl_pwm.dev) {
+		return pwm_set_pulse_dt(&config->bl_ctrl_pwm,
+				(uint32_t) ((uint64_t) config->bl_ctrl_pwm.period * brightness / UINT8_MAX));
 	}
 
 	return -ENOTSUP;
@@ -276,16 +297,15 @@ static int stm32_ltdc_display_blanking_off(const struct device *dev)
 	const struct device *display_dev = config->display_controller;
 	int err;
 
-	if (!display_dev && !config->bl_ctrl_gpio.port) {
+	if (!display_dev && !config->bl_ctrl_gpio.port && !config->bl_ctrl_pwm.dev) {
 		return -ENOSYS;
 	}
 
-	/* Turn on backlight (if its GPIO is defined in device tree) */
-	if (config->bl_ctrl_gpio.port) {
-		err = gpio_pin_set_dt(&config->bl_ctrl_gpio, 1);
-		if (err < 0) {
-			return err;
-		}
+	/* Turn on backlight */
+	err = stm32_ltdc_set_brightness(dev, UINT8_MAX);
+	if (err < 0) {
+		LOG_ERR("Turn on backlight failed: %d", err);
+		return err;
 	}
 
 	/* Panel controller's phandle is not passed to LTDC in devicetree */
@@ -307,16 +327,15 @@ static int stm32_ltdc_display_blanking_on(const struct device *dev)
 	const struct device *display_dev = config->display_controller;
 	int err;
 
-	if (!display_dev && !config->bl_ctrl_gpio.port) {
+	if (!display_dev && !config->bl_ctrl_gpio.port && !config->bl_ctrl_pwm.dev) {
 		return -ENOSYS;
 	}
 
-	/* Turn off backlight (if its GPIO is defined in device tree) */
-	if (config->bl_ctrl_gpio.port) {
-		err = gpio_pin_set_dt(&config->bl_ctrl_gpio, 0);
-		if (err < 0) {
-			return err;
-		}
+	/* Turn off backlight */
+	err = stm32_ltdc_set_brightness(dev, 0);
+	if (err < 0) {
+		LOG_ERR("Turn off backlight failed: %d", err);
+		return err;
 	}
 
 	/* Panel controller's phandle is not passed to LTDC in devicetree */
@@ -528,6 +547,7 @@ static DEVICE_API(display, stm32_ltdc_display_api) = {
 	.get_capabilities = stm32_ltdc_get_capabilities,
 	.set_pixel_format = stm32_ltdc_set_pixel_format,
 	.set_orientation = stm32_ltdc_set_orientation,
+	.set_brightness = stm32_ltdc_set_brightness,
 	.blanking_off = stm32_ltdc_display_blanking_off,
 	.blanking_on = stm32_ltdc_display_blanking_on,
 };
@@ -559,6 +579,18 @@ static DEVICE_API(display, stm32_ltdc_display_api) = {
 	/* frame buffer aligned to cache line width for optimal cache flushing */                  \
 	FRAME_BUFFER_SECTION static uint8_t __aligned(32)                                          \
 		frame_buffer_##inst[CONFIG_STM32_LTDC_FB_NUM * STM32_LTDC_FRAME_BUFFER_LEN(inst)];
+#endif
+
+#if defined(CONFIG_PWM)
+#define BL_CTRL_PWM_DT_SPEC_INST_GET(inst, prop)					\
+	{										\
+		.dev = DEVICE_DT_GET(DT_PHANDLE_BY_IDX(DT_DRV_INST(inst), prop, 0)),	\
+		.channel = DT_PHA_BY_IDX(DT_DRV_INST(inst), prop, 0, channel),		\
+		.period = DT_PHA_BY_IDX(DT_DRV_INST(inst), prop, 0, period),		\
+		.flags = DT_PHA_BY_IDX_OR(DT_DRV_INST(inst), prop, 0, flags, 0),	\
+	}
+#else
+#define BL_CTRL_PWM_DT_SPEC_INST_GET(inst, prop)
 #endif
 
 #define STM32_LTDC_DEVICE(inst)									\
@@ -671,6 +703,8 @@ static DEVICE_API(display, stm32_ltdc_display_api) = {
 				(GPIO_DT_SPEC_INST_GET(inst, disp_on_gpios)), ({ 0 })),		\
 		.bl_ctrl_gpio = COND_CODE_1(DT_INST_NODE_HAS_PROP(inst, bl_ctrl_gpios),		\
 				(GPIO_DT_SPEC_INST_GET(inst, bl_ctrl_gpios)), ({ 0 })),		\
+		.bl_ctrl_pwm  = COND_CODE_1(DT_INST_NODE_HAS_PROP(inst, pwms),			\
+				(PWM_DT_SPEC_INST_GET(inst)), ({ 0 })),				\
 		.reset = RESET_DT_SPEC_INST_GET(0),						\
 		.pclken = pclken_##inst,					\
 		.pclk_len = DT_INST_NUM_CLOCKS(inst),				\
